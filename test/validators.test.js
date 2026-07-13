@@ -10,7 +10,7 @@ import {
 
 test("soapNoteInputSchema accepts complete SOAP payload", () => {
   const result = soapNoteInputSchema.safeParse({
-    clientId: "11111111-1111-1111-1111-111111111111",
+    clientId: "550e8400-e29b-41d4-a716-446655440000",
     sessionAt: new Date().toISOString(),
     subjective: "Client reports mild soreness.",
     objective: "Palpation noted tension in right trapezius.",

@@ -2,12 +2,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import cors from "cors";
-import dotenv from "dotenv";
 import express from "express";
 import helmet from "helmet";
 import pinoHttp from "pino-http";
-
-dotenv.config();
 
 import { env } from "./config.js";
 import { isHttpError } from "./lib/http-error.js";
