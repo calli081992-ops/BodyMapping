@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BodyMapping | HIPAA SOAP Notes</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, Arial, sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #f4f7fb;
+        color: #10213b;
+      }
+      header {
+        background: #123469;
+        color: #ffffff;
+        padding: 1rem 1.5rem;
+      }
+      main {
+        max-width: 1100px;
+        margin: 1.5rem auto;
+        padding: 0 1rem 3rem;
+      }
+      .card {
+        background: #ffffff;
+        border-radius: 10px;
+        box-shadow: 0 1px 8px rgba(26, 48, 88, 0.08);
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      h1,
+      h2 {
+        margin-top: 0;
+      }
+      .grid-2 {
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      label {
+        display: block;
+        margin-bottom: 0.25rem;
+        font-weight: 600;
+      }
+      input,
+      textarea,
+      select,
+      button {
+        width: 100%;
+        border: 1px solid #c9d4e8;
+        border-radius: 6px;
+        font: inherit;
+        padding: 0.5rem 0.6rem;
+        box-sizing: border-box;
+      }
+      textarea {
+        min-height: 88px;
+        resize: vertical;
+      }
+      button {
+        cursor: pointer;
+        border: none;
+        background: #1f5ad6;
+        color: white;
+        font-weight: 700;
+      }
+      button.secondary {
+        background: #445777;
+      }
+      .status {
+        padding: 0.5rem;
+        border-radius: 6px;
+        background: #edf4ff;
+        margin-top: 0.5rem;
+      }
+      .error {
+        background: #ffe8e8;
+        color: #8d1717;
+      }
+      .history-item {
+        border: 1px solid #dde6f5;
+        border-radius: 8px;
+        padding: 0.65rem;
+        margin-bottom: 0.6rem;
+      }
+      .history-actions {
+        margin-top: 0.5rem;
+        display: flex;
+        gap: 0.5rem;
+      }
+      .muted {
+        color: #4a5c7d;
+      }
+      @media (max-width: 760px) {
+        .grid-2 {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>BodyMapping HIPAA SOAP Notes</h1>
+      <p>Encrypted SOAP records for solo therapists and multi-therapist organizations.</p>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Session context</h2>
+        <p class="muted">
+          Paste a Supabase user JWT and organization UUID. Every request uses tenant-scoped auth.
+        </p>
+        <div class="grid-2">
+          <div>
+            <label for="jwtToken">Supabase access token</label>
+            <input id="jwtToken" type="password" autocomplete="off" />
+          </div>
+          <div>
+            <label for="organizationId">Organization ID</label>
+            <input id="organizationId" type="text" autocomplete="off" />
+          </div>
+        </div>
+        <button id="validateContext" class="secondary" type="button">Validate context</button>
+        <div id="contextStatus" class="status muted">Not validated.</div>
+      </section>
+
+      <section class="card">
+        <h2>Create client</h2>
+        <div class="grid-2">
+          <div>
+            <label for="clientFirstName">First name</label>
+            <input id="clientFirstName" type="text" />
+          </div>
+          <div>
+            <label for="clientLastName">Last name</label>
+            <input id="clientLastName" type="text" />
+          </div>
+        </div>
+        <label for="clientEmail">Email</label>
+        <input id="clientEmail" type="email" />
+        <button id="createClient" type="button">Create client</button>
+        <div id="clientStatus" class="status muted">No new client yet.</div>
+      </section>
+
+      <section class="card">
+        <h2>Create SOAP note</h2>
+        <div class="grid-2">
+          <div>
+            <label for="clientSelect">Client</label>
+            <select id="clientSelect"></select>
+          </div>
+          <div>
+            <label for="sessionAt">Session datetime</label>
+            <input id="sessionAt" type="datetime-local" />
+          </div>
+        </div>
+
+        <label for="subjective">Subjective</label>
+        <textarea id="subjective"></textarea>
+        <label for="objective">Objective</label>
+        <textarea id="objective"></textarea>
+        <label for="assessment">Assessment</label>
+        <textarea id="assessment"></textarea>
+        <label for="plan">Plan</label>
+        <textarea id="plan"></textarea>
+        <button id="createNote" type="button">Save note + encrypted PDF</button>
+        <div id="noteStatus" class="status muted">No note created yet.</div>
+      </section>
+
+      <section class="card">
+        <h2>Search client history</h2>
+        <div class="grid-2">
+          <div>
+            <label for="historySearch">Search term</label>
+            <input id="historySearch" type="text" placeholder="name, email, SOAP content..." />
+          </div>
+          <div>
+            <label for="historyClient">Filter by client</label>
+            <select id="historyClient"></select>
+          </div>
+        </div>
+        <button id="searchHistory" class="secondary" type="button">Search history</button>
+        <div id="historyStatus" class="status muted">No results loaded.</div>
+        <div id="historyResults"></div>
+      </section>
+    </main>
+
+    <script>
+      const byId = (id) => document.getElementById(id);
+      const state = {
+        clients: [],
+      };
+
+      function authHeaders() {
+        const token = byId("jwtToken").value.trim();
+        const orgId = byId("organizationId").value.trim();
+        if (!token || !orgId) {
+          throw new Error("Provide token and organization ID first.");
+        }
+        return {
+          Authorization: `Bearer ${token}`,
+          "X-Organization-Id": orgId,
+          "Content-Type": "application/json",
+        };
+      }
+
+      function setStatus(targetId, message, isError = false) {
+        const element = byId(targetId);
+        element.classList.toggle("error", isError);
+        element.textContent = message;
+      }
+
+      function isoFromInput(value) {
+        if (!value) return undefined;
+        return new Date(value).toISOString();
+      }
+
+      async function api(path, options = {}) {
+        const response = await fetch(path, {
+          ...options,
+          headers: {
+            ...authHeaders(),
+            ...(options.headers || {}),
+          },
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.error || "Request failed.");
+        }
+        return payload;
+      }
+
+      async function loadClients() {
+        const payload = await api("/api/clients");
+        state.clients = payload.clients || [];
+        const selectors = [byId("clientSelect"), byId("historyClient")];
+        for (const selector of selectors) {
+          selector.innerHTML = "";
+        }
+        const allOption = document.createElement("option");
+        allOption.value = "";
+        allOption.textContent = "All clients";
+        byId("historyClient").append(allOption);
+
+        for (const client of state.clients) {
+          const optionText = `${client.last_name}, ${client.first_name} (${client.email})`;
+          const createOption = document.createElement("option");
+          createOption.value = client.id;
+          createOption.textContent = optionText;
+          byId("clientSelect").append(createOption);
+
+          const historyOption = document.createElement("option");
+          historyOption.value = client.id;
+          historyOption.textContent = optionText;
+          byId("historyClient").append(historyOption);
+        }
+      }
+
+      async function validateContext() {
+        try {
+          const payload = await api("/api/me");
+          setStatus(
+            "contextStatus",
+            `Authenticated: ${payload.therapistName} (${payload.role}) in org ${payload.organizationId}`,
+          );
+          await loadClients();
+          setStatus("historyStatus", "Client list refreshed.");
+        } catch (error) {
+          setStatus("contextStatus", error.message, true);
+        }
+      }
+
+      async function createClient() {
+        try {
+          const payload = await api("/api/clients", {
+            method: "POST",
+            body: JSON.stringify({
+              firstName: byId("clientFirstName").value.trim(),
+              lastName: byId("clientLastName").value.trim(),
+              email: byId("clientEmail").value.trim(),
+            }),
+          });
+          setStatus(
+            "clientStatus",
+            `Client created: ${payload.client.last_name}, ${payload.client.first_name}`,
+          );
+          await loadClients();
+        } catch (error) {
+          setStatus("clientStatus", error.message, true);
+        }
+      }
+
+      async function createNote() {
+        try {
+          const payload = await api("/api/soap-notes", {
+            method: "POST",
+            body: JSON.stringify({
+              clientId: byId("clientSelect").value,
+              sessionAt: isoFromInput(byId("sessionAt").value),
+              subjective: byId("subjective").value.trim(),
+              objective: byId("objective").value.trim(),
+              assessment: byId("assessment").value.trim(),
+              plan: byId("plan").value.trim(),
+            }),
+          });
+          setStatus(
+            "noteStatus",
+            `Note ${payload.note.id} saved. Retention until ${new Date(payload.note.retentionUntil).toLocaleDateString()}.`,
+          );
+        } catch (error) {
+          setStatus("noteStatus", error.message, true);
+        }
+      }
+
+      async function searchHistory() {
+        try {
+          const query = new URLSearchParams();
+          if (byId("historySearch").value.trim()) {
+            query.set("query", byId("historySearch").value.trim());
+          }
+          if (byId("historyClient").value) {
+            query.set("clientId", byId("historyClient").value);
+          }
+          query.set("limit", "50");
+
+          const payload = await api(`/api/clients/history?${query.toString()}`, {
+            method: "GET",
+          });
+
+          const results = payload.history || [];
+          setStatus("historyStatus", `Loaded ${results.length} notes.`);
+
+          const holder = byId("historyResults");
+          holder.innerHTML = "";
+          for (const note of results) {
+            const wrapper = document.createElement("div");
+            wrapper.className = "history-item";
+            wrapper.innerHTML = `
+              <strong>${note.client.last_name}, ${note.client.first_name}</strong><br/>
+              <span class="muted">Note ID: ${note.id}</span><br/>
+              <span class="muted">Session: ${note.sessionAt || note.createdAt}</span><br/>
+              <span class="muted">Therapist: ${note.therapist.display_name}</span><br/>
+              <p><strong>S:</strong> ${note.subjective}</p>
+              <p><strong>O:</strong> ${note.objective}</p>
+              <p><strong>A:</strong> ${note.assessment}</p>
+              <p><strong>P:</strong> ${note.plan}</p>
+            `;
+
+            const actions = document.createElement("div");
+            actions.className = "history-actions";
+            const sendButton = document.createElement("button");
+            sendButton.type = "button";
+            sendButton.textContent = "Send encrypted PDF";
+            sendButton.onclick = async () => {
+              sendButton.disabled = true;
+              try {
+                await api(`/api/soap-notes/${note.id}/email`, { method: "POST", body: "{}" });
+                setStatus(
+                  "historyStatus",
+                  `Encrypted delivery logged for note ${note.id} to ${note.client.email}.`,
+                );
+              } catch (error) {
+                setStatus("historyStatus", error.message, true);
+              } finally {
+                sendButton.disabled = false;
+              }
+            };
+            actions.append(sendButton);
+            wrapper.append(actions);
+            holder.append(wrapper);
+          }
+        } catch (error) {
+          setStatus("historyStatus", error.message, true);
+        }
+      }
+
+      byId("validateContext").addEventListener("click", validateContext);
+      byId("createClient").addEventListener("click", createClient);
+      byId("createNote").addEventListener("click", createNote);
+      byId("searchHistory").addEventListener("click", searchHistory);
+    </script>
+  </body>
+</html>

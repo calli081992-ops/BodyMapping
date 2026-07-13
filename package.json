@@ -1,0 +1,39 @@
+{
+  "name": "hipaa-soap-notes-app",
+  "version": "1.0.0",
+  "description": "HIPAA-oriented SOAP notes platform for massage therapists",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/calli081992-ops/BodyMapping.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/calli081992-ops/BodyMapping/issues"
+  },
+  "homepage": "https://github.com/calli081992-ops/BodyMapping#readme",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1086.0",
+    "@aws-sdk/s3-request-presigner": "^3.1086.0",
+    "@supabase/supabase-js": "^2.110.3",
+    "axios": "^1.18.1",
+    "cors": "^2.8.6",
+    "dayjs": "^1.11.21",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "helmet": "^8.3.0",
+    "pdf-lib": "^1.17.1",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "uuid": "^14.0.1",
+    "zod": "^4.4.3"
+  }
+}
