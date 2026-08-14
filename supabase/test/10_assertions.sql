@@ -140,4 +140,57 @@ begin
   raise notice 'PASS[10]: 10-year retention default + full-text search';
 end $$;
 
+-- [11] 004: a therapist may enqueue an email delivery job they own.
+do $$
+begin
+  perform set_config('request.jwt.claim.sub','33333333-3333-3333-3333-333333333333', true);
+  begin
+    insert into email_delivery_jobs (organization_id, note_id, enqueued_by_therapist_id, destination_email)
+      values ('0a000000-0000-0000-0000-0000000000aa','0d000000-0000-0000-0000-0000000000d1','cccccccc-0000-0000-0000-00000000cccc','patient@x');
+  exception when others then raise exception 'FAIL[enqueue]: therapist could not enqueue own job: %', sqlerrm;
+  end;
+  raise notice 'PASS[11]: 004 therapist can enqueue an email delivery job';
+end $$;
+
+-- [12] 004: cannot enqueue a job attributed to a different therapist.
+do $$
+declare denied boolean := false;
+begin
+  perform set_config('request.jwt.claim.sub','33333333-3333-3333-3333-333333333333', true);
+  begin
+    insert into email_delivery_jobs (organization_id, note_id, enqueued_by_therapist_id, destination_email)
+      values ('0a000000-0000-0000-0000-0000000000aa','0d000000-0000-0000-0000-0000000000d1','aaaaaaaa-0000-0000-0000-00000000aaaa','patient@x');
+  exception when others then denied := true;
+  end;
+  if not denied then raise exception 'FAIL[enqueue-spoof]: enqueued a job as another therapist'; end if;
+  raise notice 'PASS[12]: 004 cannot enqueue a job as another therapist';
+end $$;
+
+-- [13] 004: the claim function is not callable by authenticated users.
+do $$
+declare denied boolean := false;
+begin
+  perform set_config('request.jwt.claim.sub','33333333-3333-3333-3333-333333333333', true);
+  begin
+    perform claim_email_delivery_jobs(10, 'authenticated-should-not-run');
+  exception when others then denied := true;
+  end;
+  if not denied then raise exception 'FAIL[claim-authz]: authenticated could execute claim_email_delivery_jobs'; end if;
+  raise notice 'PASS[13]: 004 claim function denied to authenticated role';
+end $$;
+
+reset role;
+
+-- [14] 004: the service role (worker) can atomically claim due jobs.
+set role service_role;
+do $$
+declare n int; s email_delivery_status;
+begin
+  select count(*) into n from claim_email_delivery_jobs(10, 'test-worker');
+  if n < 1 then raise exception 'FAIL[claim]: service_role claimed % jobs (expected >=1)', n; end if;
+  select status into s from email_delivery_jobs where note_id='0d000000-0000-0000-0000-0000000000d1' limit 1;
+  if s <> 'processing' then raise exception 'FAIL[claim-state]: claimed job status is % (expected processing)', s; end if;
+  raise notice 'PASS[14]: 004 service_role claims due jobs and marks them processing';
+end $$;
+
 reset role;
