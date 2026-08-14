@@ -39,3 +39,18 @@ export const emailAuditQuerySchema = z.object({
   to: z.string().datetime().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
+
+export const queueEmailRequestSchema = z.object({
+  destinationEmail: z.string().trim().email().optional(),
+});
+
+export const emailJobQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  status: z
+    .enum(["queued", "processing", "retry_pending", "succeeded", "failed"])
+    .optional(),
+});
+
+export const downloadUrlQuerySchema = z.object({
+  expiresInSeconds: z.coerce.number().int().min(60).max(900).optional(),
+});

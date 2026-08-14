@@ -14,14 +14,16 @@ HIPAA-oriented SOAP notes web app starter for massage therapists and spa teams. 
 - Email send audit logging (timestamp, destination email, success/fail, external id/error code)
 - Minimum 10-year record retention controls at the database layer
 - Team client-sharing controls for spa/business organizations
+- Background delivery queue with retry/backoff for Paubox sends
+- Signed S3 download URLs for secure PDF retrieval
 
 ## Architecture
 
 - **Frontend prototype**: static HTML/JS client served by Express
-- **Backend**: `/api` routes for auth context, clients, SOAP notes, history search, and secure email send
+- **Backend**: `/api` routes for auth context, clients, SOAP notes, history search, delivery queue, and secure download URLs
 - **Database**: Supabase migration in `supabase/migrations/001_initial_schema.sql`
 - **Storage**: S3 object key per tenant/client/note (`orgId/clientId/noteId.pdf`) with enforced server-side encryption
-- **Email**: Paubox `/messages` API with encrypted notification flow and PDF attachment
+- **Email**: Paubox `/messages` API with encrypted notification flow and PDF attachment, driven by a retrying queue worker
 
 ## Security/Compliance Notes
 
@@ -57,8 +59,10 @@ cp .env.example .env
 Fill all values in `.env`:
 
 - `SUPABASE_URL`, `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
 - `AWS_REGION`, `AWS_S3_BUCKET`, optional `AWS_KMS_KEY_ID`
 - `PAUBOX_API_KEY`, `PAUBOX_API_ENDPOINT`, `PAUBOX_FROM_EMAIL`
+- `PDF_DOWNLOAD_URL_TTL_SECONDS`, `EMAIL_QUEUE_*` queue settings
 
 ### 3) Apply Supabase migrations
 
@@ -66,6 +70,7 @@ Run migrations in order:
 
 1. `supabase/migrations/001_initial_schema.sql`
 2. `supabase/migrations/002_access_policy_hardening.sql`
+3. `supabase/migrations/003_email_delivery_queue.sql`
 
 ### 4) Start the server
 
@@ -108,7 +113,10 @@ Endpoints:
 - `DELETE /api/clients/:clientId/access/:therapistId`
 - `GET /api/clients/history?query=&clientId=&limit=&scope=organization|therapist`
 - `POST /api/soap-notes`
+- `GET /api/soap-notes/:noteId/download-url`
 - `POST /api/soap-notes/:noteId/email`
+- `GET /api/email-delivery-jobs`
+- `GET /api/email-delivery-jobs/:jobId`
 - `GET /api/audit/email-sends`
 
 ## Frontend Prototype Usage
@@ -121,15 +129,16 @@ In `public/index.html`:
 4. Share client access to other therapists (viewer/editor)
 5. Create SOAP note(s)
 6. Search history by organization-accessible records or only your therapist-authored records
-7. Click **Send encrypted PDF** for one-click secure client delivery via Paubox
-8. Review metadata-only email audit events
+7. Click **Send encrypted PDF** to queue delivery (automatic retry/backoff in background worker)
+8. Use **Secure PDF link** for short-lived signed download URLs
+9. Review metadata-only email audit events and delivery-job status
 
 ## Future SaaS Scaling Notes
 
 This project is prepared for multi-tenant growth with isolated org data views and RLS. For production SaaS maturity, next steps typically include:
 
 - SSO + session management frontend
-- background job queue for retryable email delivery
+- dedicated external worker + dead-letter queue for large-scale delivery throughput
 - immutable audit export pipeline
 - per-tenant KMS key strategy
 - SOC2/HIPAA control automation and centralized observability

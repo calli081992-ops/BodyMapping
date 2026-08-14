@@ -6,17 +6,19 @@ import { HttpError } from "../lib/http-error.js";
 import { parseBody, parseQuery, sanitizeIlikeTerm } from "../lib/request-helpers.js";
 import {
   createClientSchema,
+  downloadUrlQuerySchema,
   emailAuditQuerySchema,
-  emailNoteInputSchema,
+  emailJobQuerySchema,
   grantClientAccessSchema,
   historyQuerySchema,
+  queueEmailRequestSchema,
   soapNoteInputSchema,
 } from "../lib/validators.js";
 import { logger } from "../logger.js";
 import { requireAuthContext } from "../middleware/auth-context.js";
-import { sendEncryptedNoteEmail } from "../services/paubox-service.js";
+import { triggerEmailQueueProcessing } from "../services/email-queue-worker.js";
 import { buildSoapNotePdfBuffer } from "../services/pdf-service.js";
-import { uploadEncryptedPdf } from "../services/s3-storage.js";
+import { createSignedPdfDownloadUrl, uploadEncryptedPdf } from "../services/s3-storage.js";
 
 const noteIdParamSchema = z.object({
   noteId: z.string().uuid(),
@@ -31,9 +33,28 @@ const clientAccessParamsSchema = z.object({
   therapistId: z.string().uuid(),
 });
 
+const emailDeliveryJobIdParamSchema = z.object({
+  jobId: z.string().uuid(),
+});
+
 const router = Router();
 
 router.use(requireAuthContext);
+
+const loadNoteWithContext = async ({ db, organizationId, noteId }) => {
+  const { data, error } = await db
+    .from("soap_notes")
+    .select(
+      "id, organization_id, client_id, therapist_id, created_at, session_at, retention_until, subjective, objective, assessment, plan, pdf_storage_status, s3_object_key, client:clients!inner(id, first_name, last_name, email), therapist:therapists!inner(id, display_name), organization:organizations!inner(name)",
+    )
+    .eq("organization_id", organizationId)
+    .eq("id", noteId)
+    .single();
+  if (error) {
+    throw error;
+  }
+  return data;
+};
 
 router.get("/me", (req, res) => {
   res.json({
@@ -292,7 +313,7 @@ router.get("/audit/email-sends", async (req, res, next) => {
     let auditQuery = req.db
       .from("email_send_audit")
       .select(
-        "id, note_id, destination_email, status, external_message_id, error_code, sent_at, sender:therapists!inner(id, display_name)",
+        "id, note_id, destination_email, status, external_message_id, error_code, sent_at, job_id, attempt_number, sender:therapists!inner(id, display_name)",
       )
       .eq("organization_id", req.auth.organizationId)
       .order("sent_at", { ascending: false })
@@ -328,8 +349,86 @@ router.get("/audit/email-sends", async (req, res, next) => {
         externalMessageId: entry.external_message_id,
         errorCode: entry.error_code,
         sentAt: entry.sent_at,
+        jobId: entry.job_id,
+        attemptNumber: entry.attempt_number,
         sentBy: entry.sender,
       })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/email-delivery-jobs", async (req, res, next) => {
+  try {
+    const query = parseQuery(emailJobQuerySchema, req.query);
+    let jobsQuery = req.db
+      .from("email_delivery_jobs")
+      .select(
+        "id, note_id, destination_email, status, attempt_count, max_attempts, next_attempt_at, last_attempt_at, completed_at, last_error_code, created_at",
+      )
+      .eq("organization_id", req.auth.organizationId)
+      .order("created_at", { ascending: false })
+      .limit(query.limit);
+
+    if (query.status) {
+      jobsQuery = jobsQuery.eq("status", query.status);
+    }
+
+    const { data, error } = await jobsQuery;
+    if (error) {
+      throw error;
+    }
+
+    res.json({
+      jobs: (data ?? []).map((job) => ({
+        id: job.id,
+        noteId: job.note_id,
+        destinationEmail: job.destination_email,
+        status: job.status,
+        attemptCount: job.attempt_count,
+        maxAttempts: job.max_attempts,
+        nextAttemptAt: job.next_attempt_at,
+        lastAttemptAt: job.last_attempt_at,
+        completedAt: job.completed_at,
+        lastErrorCode: job.last_error_code,
+        createdAt: job.created_at,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/email-delivery-jobs/:jobId", async (req, res, next) => {
+  try {
+    const { jobId } = emailDeliveryJobIdParamSchema.parse(req.params);
+    const { data, error } = await req.db
+      .from("email_delivery_jobs")
+      .select(
+        "id, note_id, destination_email, status, attempt_count, max_attempts, next_attempt_at, last_attempt_at, completed_at, last_error_code, created_at",
+      )
+      .eq("organization_id", req.auth.organizationId)
+      .eq("id", jobId)
+      .single();
+    if (error) {
+      throw error;
+    }
+
+    res.json({
+      job: {
+        id: data.id,
+        noteId: data.note_id,
+        destinationEmail: data.destination_email,
+        status: data.status,
+        attemptCount: data.attempt_count,
+        maxAttempts: data.max_attempts,
+        nextAttemptAt: data.next_attempt_at,
+        lastAttemptAt: data.last_attempt_at,
+        completedAt: data.completed_at,
+        lastErrorCode: data.last_error_code,
+        createdAt: data.created_at,
+      },
     });
   } catch (error) {
     next(error);
@@ -442,100 +541,109 @@ router.post("/soap-notes", async (req, res, next) => {
   }
 });
 
-router.post("/soap-notes/:noteId/email", async (req, res, next) => {
-  let noteId = null;
-  let destinationEmail = null;
+router.get("/soap-notes/:noteId/download-url", async (req, res, next) => {
   try {
-    const params = noteIdParamSchema.parse(req.params);
-    noteId = params.noteId;
-    const payload = parseBody(emailNoteInputSchema, req.body ?? {});
+    const { noteId } = noteIdParamSchema.parse(req.params);
+    const query = parseQuery(downloadUrlQuerySchema, req.query);
 
-    const { data: note, error: noteError } = await req.db
-      .from("soap_notes")
-      .select(
-        "id, created_at, session_at, retention_until, subjective, objective, assessment, plan, client_id, s3_object_key, client:clients!inner(id, first_name, last_name, email), organization:organizations!inner(name)",
-      )
-      .eq("id", noteId)
-      .eq("organization_id", req.auth.organizationId)
-      .single();
-    if (noteError) {
-      throw noteError;
-    }
-
-    destinationEmail = payload.destinationEmail ?? note.client.email;
-    if (!destinationEmail) {
-      throw new HttpError(400, "Client does not have a destination email.");
-    }
-
-    const organizationName = note.organization.name;
-    const pdfBuffer = await buildSoapNotePdfBuffer({
-      note,
-      therapistName: req.auth.therapistName ?? "Therapist",
-      organizationName,
-      client: note.client,
+    const note = await loadNoteWithContext({
+      db: req.db,
+      organizationId: req.auth.organizationId,
+      noteId,
     });
 
-    if (!note.s3_object_key) {
-      const storageResult = await uploadEncryptedPdf({
+    let objectKey = note.s3_object_key;
+    if (!objectKey) {
+      const pdfBuffer = await buildSoapNotePdfBuffer({
+        note,
+        therapistName: note.therapist?.display_name ?? req.auth.therapistName ?? "Therapist",
+        organizationName: note.organization?.name ?? "Organization",
+        client: note.client,
+      });
+      const uploadResult = await uploadEncryptedPdf({
         organizationId: req.auth.organizationId,
         clientId: note.client_id,
         noteId: note.id,
         pdfBuffer,
       });
-      const { error: storageError } = await req.db
+      objectKey = uploadResult.objectKey;
+      const { error: updateError } = await req.db
         .from("soap_notes")
         .update({
-          s3_object_key: storageResult.objectKey,
-          s3_etag: storageResult.etag,
+          s3_object_key: uploadResult.objectKey,
+          s3_etag: uploadResult.etag,
           pdf_storage_status: "stored",
         })
-        .eq("id", note.id)
-        .eq("organization_id", req.auth.organizationId);
-      if (storageError) {
-        throw storageError;
+        .eq("organization_id", req.auth.organizationId)
+        .eq("id", note.id);
+      if (updateError) {
+        throw updateError;
       }
     }
 
-    const sendResult = await sendEncryptedNoteEmail({
-      toEmail: destinationEmail,
-      attachmentBuffer: pdfBuffer,
-      noteId: note.id,
+    const expiresInSeconds = query.expiresInSeconds ?? env.PDF_DOWNLOAD_URL_TTL_SECONDS;
+    const signed = await createSignedPdfDownloadUrl({
+      objectKey,
+      expiresInSeconds,
     });
-
-    const { error: auditError } = await req.db.from("email_send_audit").insert({
-      organization_id: req.auth.organizationId,
-      note_id: note.id,
-      sent_by_therapist_id: req.auth.therapistId,
-      destination_email: destinationEmail,
-      status: "success",
-      external_message_id: sendResult.messageId,
-    });
-    if (auditError) {
-      throw auditError;
-    }
 
     res.json({
       noteId: note.id,
-      destinationEmail,
-      status: "success",
+      downloadUrl: signed.url,
+      expiresInSeconds,
+      expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
     });
   } catch (error) {
-    const errorCode =
-      typeof error?.response?.status === "number"
-        ? `PAUBOX_HTTP_${error.response.status}`
-        : "SEND_FAILURE";
+    next(error);
+  }
+});
 
-    if (noteId && destinationEmail) {
-      await req.db.from("email_send_audit").insert({
-        organization_id: req.auth.organizationId,
-        note_id: noteId,
-        sent_by_therapist_id: req.auth.therapistId,
-        destination_email: destinationEmail,
-        status: "failed",
-        error_code: errorCode,
-      });
+router.post("/soap-notes/:noteId/email", async (req, res, next) => {
+  try {
+    const { noteId } = noteIdParamSchema.parse(req.params);
+    const payload = parseBody(queueEmailRequestSchema, req.body ?? {});
+    const note = await loadNoteWithContext({
+      db: req.db,
+      organizationId: req.auth.organizationId,
+      noteId,
+    });
+
+    const destinationEmail = payload.destinationEmail ?? note.client.email;
+    if (!destinationEmail) {
+      throw new HttpError(400, "Client does not have a destination email.");
     }
 
+    const { data: job, error: jobError } = await req.db
+      .from("email_delivery_jobs")
+      .insert({
+        organization_id: req.auth.organizationId,
+        note_id: note.id,
+        requested_by_therapist_id: req.auth.therapistId,
+        destination_email: destinationEmail,
+        status: "queued",
+        max_attempts: env.EMAIL_QUEUE_MAX_ATTEMPTS,
+      })
+      .select(
+        "id, note_id, destination_email, status, attempt_count, max_attempts, next_attempt_at, created_at",
+      )
+      .single();
+    if (jobError) {
+      throw jobError;
+    }
+
+    triggerEmailQueueProcessing();
+
+    res.status(202).json({
+      jobId: job.id,
+      noteId: job.note_id,
+      destinationEmail,
+      status: job.status,
+      attemptCount: job.attempt_count,
+      maxAttempts: job.max_attempts,
+      nextAttemptAt: job.next_attempt_at,
+      createdAt: job.created_at,
+    });
+  } catch (error) {
     next(error);
   }
 });

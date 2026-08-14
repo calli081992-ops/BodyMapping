@@ -4,10 +4,13 @@ import assert from "node:assert/strict";
 import { sanitizeIlikeTerm } from "../src/lib/request-helpers.js";
 import {
   createClientSchema,
+  downloadUrlQuerySchema,
   emailAuditQuerySchema,
+  emailJobQuerySchema,
   emailNoteInputSchema,
   grantClientAccessSchema,
   historyQuerySchema,
+  queueEmailRequestSchema,
   soapNoteInputSchema,
 } from "../src/lib/validators.js";
 
@@ -70,4 +73,32 @@ test("emailAuditQuerySchema validates optional status filter", () => {
     limit: 10,
   });
   assert.equal(result.success, true);
+});
+
+test("queueEmailRequestSchema accepts empty and explicit destination payload", () => {
+  const empty = queueEmailRequestSchema.safeParse({});
+  const explicit = queueEmailRequestSchema.safeParse({
+    destinationEmail: "client@example.com",
+  });
+  assert.equal(empty.success, true);
+  assert.equal(explicit.success, true);
+});
+
+test("emailJobQuerySchema validates known status values", () => {
+  const result = emailJobQuerySchema.safeParse({
+    status: "retry_pending",
+    limit: 15,
+  });
+  assert.equal(result.success, true);
+});
+
+test("downloadUrlQuerySchema constrains signed URL ttl range", () => {
+  const ok = downloadUrlQuerySchema.safeParse({
+    expiresInSeconds: 120,
+  });
+  const fail = downloadUrlQuerySchema.safeParse({
+    expiresInSeconds: 10,
+  });
+  assert.equal(ok.success, true);
+  assert.equal(fail.success, false);
 });

@@ -1,4 +1,5 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { env } from "../config.js";
 
@@ -26,4 +27,17 @@ export const uploadEncryptedPdf = async ({ organizationId, clientId, noteId, pdf
     objectKey,
     etag: result.ETag ?? null,
   };
+};
+
+export const createSignedPdfDownloadUrl = async ({ objectKey, expiresInSeconds }) => {
+  const getCommand = new GetObjectCommand({
+    Bucket: env.AWS_S3_BUCKET,
+    Key: objectKey,
+    ResponseContentType: "application/pdf",
+  });
+
+  const url = await getSignedUrl(s3Client, getCommand, {
+    expiresIn: expiresInSeconds,
+  });
+  return { url };
 };

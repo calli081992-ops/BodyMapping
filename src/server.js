@@ -10,6 +10,7 @@ import { env } from "./config.js";
 import { isHttpError } from "./lib/http-error.js";
 import { logger } from "./logger.js";
 import apiRouter from "./routes/api.js";
+import { startEmailQueueWorker } from "./services/email-queue-worker.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -95,4 +96,5 @@ app.use((error, _req, res, _next) => {
 
 app.listen(env.PORT, () => {
   logger.info({ port: env.PORT }, "HIPAA SOAP notes API listening");
+  startEmailQueueWorker();
 });

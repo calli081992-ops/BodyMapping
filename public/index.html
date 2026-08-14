@@ -259,6 +259,31 @@
         <div id="auditStatus" class="status muted">No audit events loaded.</div>
         <ul id="auditList" class="clean"></ul>
       </section>
+
+      <section class="card">
+        <h2>Email delivery queue</h2>
+        <p class="muted">Track queued, retrying, and completed delivery jobs.</p>
+        <div class="grid-2">
+          <div>
+            <label for="jobStatusFilter">Job status filter</label>
+            <select id="jobStatusFilter">
+              <option value="">All</option>
+              <option value="queued">Queued</option>
+              <option value="processing">Processing</option>
+              <option value="retry_pending">Retry pending</option>
+              <option value="succeeded">Succeeded</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+          <div>
+            <label for="jobLimit">Limit</label>
+            <input id="jobLimit" type="number" min="1" max="100" value="25" />
+          </div>
+        </div>
+        <button id="loadDeliveryJobs" class="secondary" type="button">Load delivery jobs</button>
+        <div id="jobStatus" class="status muted">No delivery jobs loaded.</div>
+        <ul id="jobList" class="clean"></ul>
+      </section>
     </main>
 
     <script>
@@ -452,10 +477,13 @@
             sendButton.onclick = async () => {
               sendButton.disabled = true;
               try {
-                await api(`/api/soap-notes/${note.id}/email`, { method: "POST", body: "{}" });
+                const queued = await api(`/api/soap-notes/${note.id}/email`, {
+                  method: "POST",
+                  body: "{}",
+                });
                 setStatus(
                   "historyStatus",
-                  `Encrypted delivery logged for note ${note.id} to ${note.client.email}.`,
+                  `Delivery job ${queued.jobId} queued for ${queued.destinationEmail}.`,
                 );
               } catch (error) {
                 setStatus("historyStatus", error.message, true);
@@ -464,6 +492,27 @@
               }
             };
             actions.append(sendButton);
+
+            const downloadButton = document.createElement("button");
+            downloadButton.type = "button";
+            downloadButton.className = "secondary";
+            downloadButton.textContent = "Secure PDF link";
+            downloadButton.onclick = async () => {
+              downloadButton.disabled = true;
+              try {
+                const payload = await api(`/api/soap-notes/${note.id}/download-url?expiresInSeconds=300`);
+                window.open(payload.downloadUrl, "_blank", "noopener");
+                setStatus(
+                  "historyStatus",
+                  `Opened signed link for note ${note.id}. Expires at ${payload.expiresAt}.`,
+                );
+              } catch (error) {
+                setStatus("historyStatus", error.message, true);
+              } finally {
+                downloadButton.disabled = false;
+              }
+            };
+            actions.append(downloadButton);
             wrapper.append(actions);
             holder.append(wrapper);
           }
@@ -570,6 +619,31 @@
         }
       }
 
+      async function loadDeliveryJobs() {
+        try {
+          const query = new URLSearchParams();
+          const status = byId("jobStatusFilter").value;
+          const limit = byId("jobLimit").value;
+          if (status) {
+            query.set("status", status);
+          }
+          if (limit) {
+            query.set("limit", limit);
+          }
+          const payload = await api(`/api/email-delivery-jobs?${query.toString()}`);
+          const list = byId("jobList");
+          list.innerHTML = "";
+          for (const job of payload.jobs || []) {
+            const row = document.createElement("li");
+            row.textContent = `${job.createdAt} - ${job.status.toUpperCase()} - note ${job.noteId} - ${job.destinationEmail} - attempts ${job.attemptCount}/${job.maxAttempts}`;
+            list.append(row);
+          }
+          setStatus("jobStatus", `Loaded ${(payload.jobs || []).length} delivery jobs.`);
+        } catch (error) {
+          setStatus("jobStatus", error.message, true);
+        }
+      }
+
       byId("validateContext").addEventListener("click", validateContext);
       byId("createClient").addEventListener("click", createClient);
       byId("createNote").addEventListener("click", createNote);
@@ -577,6 +651,7 @@
       byId("loadClientAccess").addEventListener("click", loadClientAccess);
       byId("grantClientAccess").addEventListener("click", grantClientAccess);
       byId("loadAuditLog").addEventListener("click", loadAuditLog);
+      byId("loadDeliveryJobs").addEventListener("click", loadDeliveryJobs);
     </script>
   </body>
 </html>
