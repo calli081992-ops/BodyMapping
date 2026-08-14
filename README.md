@@ -13,6 +13,7 @@ HIPAA-oriented SOAP notes web app starter for massage therapists and spa teams. 
 - One-click secure Paubox email delivery with **no PHI in email body**
 - Email send audit logging (timestamp, destination email, success/fail, external id/error code)
 - Minimum 10-year record retention controls at the database layer
+- Team client-sharing controls for spa/business organizations
 
 ## Architecture
 
@@ -59,9 +60,12 @@ Fill all values in `.env`:
 - `AWS_REGION`, `AWS_S3_BUCKET`, optional `AWS_KMS_KEY_ID`
 - `PAUBOX_API_KEY`, `PAUBOX_API_ENDPOINT`, `PAUBOX_FROM_EMAIL`
 
-### 3) Apply Supabase migration
+### 3) Apply Supabase migrations
 
-Run `supabase/migrations/001_initial_schema.sql` against your Supabase Postgres database.
+Run migrations in order:
+
+1. `supabase/migrations/001_initial_schema.sql`
+2. `supabase/migrations/002_access_policy_hardening.sql`
 
 ### 4) Start the server
 
@@ -96,11 +100,16 @@ All `/api/*` endpoints require:
 Endpoints:
 
 - `GET /api/me`
+- `GET /api/organization/therapists`
 - `GET /api/clients`
 - `POST /api/clients`
-- `GET /api/clients/history?query=&clientId=&limit=`
+- `GET /api/clients/:clientId/access`
+- `POST /api/clients/:clientId/access`
+- `DELETE /api/clients/:clientId/access/:therapistId`
+- `GET /api/clients/history?query=&clientId=&limit=&scope=organization|therapist`
 - `POST /api/soap-notes`
 - `POST /api/soap-notes/:noteId/email`
+- `GET /api/audit/email-sends`
 
 ## Frontend Prototype Usage
 
@@ -109,9 +118,11 @@ In `public/index.html`:
 1. Paste Supabase user JWT + organization ID
 2. Validate session context
 3. Create client(s)
-4. Create SOAP note(s)
-5. Search history
-6. Click **Send encrypted PDF** for one-click secure client delivery via Paubox
+4. Share client access to other therapists (viewer/editor)
+5. Create SOAP note(s)
+6. Search history by organization-accessible records or only your therapist-authored records
+7. Click **Send encrypted PDF** for one-click secure client delivery via Paubox
+8. Review metadata-only email audit events
 
 ## Future SaaS Scaling Notes
 

@@ -46,7 +46,7 @@ app.use(
 app.use(
   cors({
     origin: env.CORS_ORIGIN ? [env.CORS_ORIGIN] : true,
-    methods: ["GET", "POST", "OPTIONS"],
+    methods: ["GET", "POST", "DELETE", "OPTIONS"],
   }),
 );
 app.use(express.json({ limit: "1mb" }));

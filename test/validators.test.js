@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import { sanitizeIlikeTerm } from "../src/lib/request-helpers.js";
 import {
   createClientSchema,
+  emailAuditQuerySchema,
   emailNoteInputSchema,
+  grantClientAccessSchema,
+  historyQuerySchema,
   soapNoteInputSchema,
 } from "../src/lib/validators.js";
 
@@ -37,5 +40,34 @@ test("emailNoteInputSchema allows empty payload for default destination", () => 
 });
 
 test("sanitizeIlikeTerm escapes wildcard characters", () => {
-  assert.equal(sanitizeIlikeTerm("john_100%"), "john\\_100\\%");
+  assert.equal(sanitizeIlikeTerm("john_100%(a,b)"), "john\\_100\\%\\(a\\,b\\)");
+});
+
+test("historyQuerySchema defaults scope to organization", () => {
+  const result = historyQuerySchema.safeParse({
+    limit: 25,
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.data.scope, "organization");
+});
+
+test("grantClientAccessSchema accepts viewer and editor permission", () => {
+  const viewer = grantClientAccessSchema.safeParse({
+    therapistId: "550e8400-e29b-41d4-a716-446655440000",
+    permission: "viewer",
+  });
+  const editor = grantClientAccessSchema.safeParse({
+    therapistId: "550e8400-e29b-41d4-a716-446655440000",
+    permission: "editor",
+  });
+  assert.equal(viewer.success, true);
+  assert.equal(editor.success, true);
+});
+
+test("emailAuditQuerySchema validates optional status filter", () => {
+  const result = emailAuditQuerySchema.safeParse({
+    status: "failed",
+    limit: 10,
+  });
+  assert.equal(result.success, true);
 });

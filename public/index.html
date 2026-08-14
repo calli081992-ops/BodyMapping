@@ -91,6 +91,17 @@
         display: flex;
         gap: 0.5rem;
       }
+      .inline-actions {
+        display: flex;
+        gap: 0.5rem;
+      }
+      .inline-actions button {
+        width: auto;
+      }
+      ul.clean {
+        margin: 0.5rem 0 0;
+        padding-left: 1rem;
+      }
       .muted {
         color: #4a5c7d;
       }
@@ -181,9 +192,72 @@
             <select id="historyClient"></select>
           </div>
         </div>
+        <div class="grid-2">
+          <div>
+            <label for="historyScope">Scope</label>
+            <select id="historyScope">
+              <option value="organization">Organization-accessible notes</option>
+              <option value="therapist">Only my notes</option>
+            </select>
+          </div>
+          <div></div>
+        </div>
         <button id="searchHistory" class="secondary" type="button">Search history</button>
         <div id="historyStatus" class="status muted">No results loaded.</div>
         <div id="historyResults"></div>
+      </section>
+
+      <section class="card">
+        <h2>Client sharing (spa/team)</h2>
+        <p class="muted">Grant or revoke therapist access to a specific client record.</p>
+        <div class="grid-2">
+          <div>
+            <label for="shareClient">Client</label>
+            <select id="shareClient"></select>
+          </div>
+          <div>
+            <label for="shareTherapist">Therapist</label>
+            <select id="shareTherapist"></select>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div>
+            <label for="sharePermission">Permission</label>
+            <select id="sharePermission">
+              <option value="viewer">Viewer</option>
+              <option value="editor">Editor</option>
+            </select>
+          </div>
+          <div></div>
+        </div>
+        <div class="inline-actions">
+          <button id="loadClientAccess" class="secondary" type="button">Load current access</button>
+          <button id="grantClientAccess" type="button">Grant / update access</button>
+        </div>
+        <div id="shareStatus" class="status muted">No sharing changes yet.</div>
+        <ul id="accessList" class="clean"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Email delivery audit log</h2>
+        <p class="muted">Metadata-only event log (no note content).</p>
+        <div class="grid-2">
+          <div>
+            <label for="auditStatusFilter">Status filter</label>
+            <select id="auditStatusFilter">
+              <option value="">All</option>
+              <option value="success">Success</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+          <div>
+            <label for="auditLimit">Limit</label>
+            <input id="auditLimit" type="number" min="1" max="100" value="25" />
+          </div>
+        </div>
+        <button id="loadAuditLog" class="secondary" type="button">Load email send events</button>
+        <div id="auditStatus" class="status muted">No audit events loaded.</div>
+        <ul id="auditList" class="clean"></ul>
       </section>
     </main>
 
@@ -191,6 +265,7 @@
       const byId = (id) => document.getElementById(id);
       const state = {
         clients: [],
+        therapists: [],
       };
 
       function authHeaders() {
@@ -235,7 +310,7 @@
       async function loadClients() {
         const payload = await api("/api/clients");
         state.clients = payload.clients || [];
-        const selectors = [byId("clientSelect"), byId("historyClient")];
+        const selectors = [byId("clientSelect"), byId("historyClient"), byId("shareClient")];
         for (const selector of selectors) {
           selector.innerHTML = "";
         }
@@ -255,17 +330,37 @@
           historyOption.value = client.id;
           historyOption.textContent = optionText;
           byId("historyClient").append(historyOption);
+
+          const shareOption = document.createElement("option");
+          shareOption.value = client.id;
+          shareOption.textContent = optionText;
+          byId("shareClient").append(shareOption);
+        }
+      }
+
+      async function loadTherapists() {
+        const payload = await api("/api/organization/therapists");
+        state.therapists = payload.therapists || [];
+        const selector = byId("shareTherapist");
+        selector.innerHTML = "";
+        for (const therapist of state.therapists) {
+          const option = document.createElement("option");
+          option.value = therapist.id;
+          option.textContent = `${therapist.displayName} (${therapist.role})`;
+          selector.append(option);
         }
       }
 
       async function validateContext() {
         try {
           const payload = await api("/api/me");
+          state.me = payload;
           setStatus(
             "contextStatus",
             `Authenticated: ${payload.therapistName} (${payload.role}) in org ${payload.organizationId}`,
           );
           await loadClients();
+          await loadTherapists();
           setStatus("historyStatus", "Client list refreshed.");
         } catch (error) {
           setStatus("contextStatus", error.message, true);
@@ -323,6 +418,7 @@
           if (byId("historyClient").value) {
             query.set("clientId", byId("historyClient").value);
           }
+          query.set("scope", byId("historyScope").value);
           query.set("limit", "50");
 
           const payload = await api(`/api/clients/history?${query.toString()}`, {
@@ -376,10 +472,111 @@
         }
       }
 
+      async function loadClientAccess() {
+        try {
+          const clientId = byId("shareClient").value;
+          if (!clientId) {
+            throw new Error("Select a client first.");
+          }
+          const payload = await api(`/api/clients/${clientId}/access`);
+          const list = byId("accessList");
+          list.innerHTML = "";
+          for (const entry of payload.access || []) {
+            const item = document.createElement("li");
+            item.textContent = `${entry.therapistName} (${entry.therapistEmail}) - ${entry.permission}`;
+
+            if (entry.therapistId !== state.me?.therapistId) {
+              const revoke = document.createElement("button");
+              revoke.type = "button";
+              revoke.className = "secondary";
+              revoke.style.marginLeft = "8px";
+              revoke.textContent = "Revoke";
+              revoke.onclick = async () => {
+                revoke.disabled = true;
+                try {
+                  await api(
+                    `/api/clients/${clientId}/access/${entry.therapistId}`,
+                    { method: "DELETE" },
+                  );
+                  setStatus(
+                    "shareStatus",
+                    `Revoked access for ${entry.therapistName}.`,
+                  );
+                  await loadClientAccess();
+                } catch (error) {
+                  setStatus("shareStatus", error.message, true);
+                } finally {
+                  revoke.disabled = false;
+                }
+              };
+              item.append(revoke);
+            }
+            list.append(item);
+          }
+          setStatus("shareStatus", `Loaded ${(payload.access || []).length} access records.`);
+        } catch (error) {
+          setStatus("shareStatus", error.message, true);
+        }
+      }
+
+      async function grantClientAccess() {
+        try {
+          const clientId = byId("shareClient").value;
+          if (!clientId) {
+            throw new Error("Select a client first.");
+          }
+          const therapistId = byId("shareTherapist").value;
+          if (!therapistId) {
+            throw new Error("Select a therapist.");
+          }
+          const permission = byId("sharePermission").value;
+          const payload = await api(`/api/clients/${clientId}/access`, {
+            method: "POST",
+            body: JSON.stringify({ therapistId, permission }),
+          });
+          const therapist = state.therapists.find((item) => item.id === payload.access.therapistId);
+          setStatus(
+            "shareStatus",
+            `Access updated: ${therapist ? therapist.displayName : payload.access.therapistId} -> ${payload.access.permission}.`,
+          );
+          await loadClientAccess();
+        } catch (error) {
+          setStatus("shareStatus", error.message, true);
+        }
+      }
+
+      async function loadAuditLog() {
+        try {
+          const query = new URLSearchParams();
+          const status = byId("auditStatusFilter").value;
+          const limit = byId("auditLimit").value;
+          if (status) {
+            query.set("status", status);
+          }
+          if (limit) {
+            query.set("limit", limit);
+          }
+          const payload = await api(`/api/audit/email-sends?${query.toString()}`);
+          const list = byId("auditList");
+          list.innerHTML = "";
+          for (const item of payload.sends || []) {
+            const row = document.createElement("li");
+            row.textContent = `${item.sentAt} - ${item.status.toUpperCase()} - ${item.destinationEmail} - by ${item.sentBy.display_name}`;
+            list.append(row);
+          }
+          setStatus("auditStatus", `Loaded ${(payload.sends || []).length} send events.`);
+        } catch (error) {
+          setStatus("auditStatus", error.message, true);
+        }
+      }
+
       byId("validateContext").addEventListener("click", validateContext);
       byId("createClient").addEventListener("click", createClient);
       byId("createNote").addEventListener("click", createNote);
       byId("searchHistory").addEventListener("click", searchHistory);
+      byId("loadClientAccess").addEventListener("click", loadClientAccess);
+      byId("grantClientAccess").addEventListener("click", grantClientAccess);
+      byId("loadAuditLog").addEventListener("click", loadAuditLog);
     </script>
   </body>
 </html>
