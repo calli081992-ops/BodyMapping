@@ -21,3 +21,7 @@ This repo is a single Node.js/Express app (HIPAA SOAP notes for massage therapis
   - Paubox (`PAUBOX_API_KEY`, `PAUBOX_API_ENDPOINT`, `PAUBOX_FROM_EMAIL`) — only for `POST /api/soap-notes/:noteId/email`.
 - Without those secrets you can still verify the environment: `npm test`, boot the server, `curl /health`, load the UI, and generate a SOAP-note PDF directly via `src/services/pdf-service.js`.
 - `.env` is gitignored; never commit real credentials.
+
+### Database / migrations
+- `supabase/migrations/001_initial_schema.sql` targets Supabase Postgres and assumes the Supabase-managed baseline exists (`auth` schema, `auth.uid()`, and the `anon`/`authenticated`/`service_role` roles). To validate it on a plain local Postgres, first create those objects (an `auth` schema, an `auth.users` table, an `auth.uid()` that reads `current_setting('request.jwt.claim.sub', true)::uuid`, and the three roles), then apply the migration.
+- The RLS helper functions (`current_therapist_id`, `has_org_role`, `can_access_client`) are `SECURITY DEFINER` on purpose: they read tables whose own policies call them, so as `SECURITY INVOKER` they recurse into themselves and fail with `stack depth limit exceeded`. Keep them `SECURITY DEFINER` when editing.

@@ -170,10 +170,16 @@ before delete on soap_notes
 for each row
 execute function prevent_early_soap_note_delete();
 
+-- These helpers query tables (therapists, organization_memberships, client_access)
+-- whose own RLS policies call these same helpers. They must run as SECURITY DEFINER
+-- so their internal reads bypass RLS (and are not SQL-inlined); otherwise every
+-- policy check recurses into itself and fails with "stack depth limit exceeded".
 create or replace function current_therapist_id()
 returns uuid
 language sql
 stable
+security definer
+set search_path = public, auth
 as $$
   select t.id
   from therapists t
@@ -185,6 +191,8 @@ create or replace function has_org_role(target_org uuid, allowed_roles membershi
 returns boolean
 language sql
 stable
+security definer
+set search_path = public, auth
 as $$
   select exists(
     select 1
@@ -199,6 +207,8 @@ create or replace function can_access_client(target_org uuid, target_client uuid
 returns boolean
 language sql
 stable
+security definer
+set search_path = public, auth
 as $$
   select
     has_org_role(target_org, array['owner', 'admin']::membership_role[])
