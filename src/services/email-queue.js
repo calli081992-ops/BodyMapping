@@ -118,6 +118,7 @@ export const runEmailQueueOnce = async (
   const { data: jobs, error } = await serviceDb.rpc("claim_email_delivery_jobs", {
     p_batch: batchSize,
     p_worker: workerId,
+    p_lock_timeout_seconds: env.EMAIL_QUEUE_LOCK_TIMEOUT_SECONDS,
   });
   if (error) {
     throw error;

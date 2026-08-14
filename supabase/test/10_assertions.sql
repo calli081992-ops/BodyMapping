@@ -194,3 +194,28 @@ begin
 end $$;
 
 reset role;
+
+-- [15] 005: reclaim jobs stuck in 'processing' past the lock timeout, but not
+-- recently-locked ones.
+set role service_role;
+do $$
+declare stale_id uuid; recent_id uuid; got_stale int; got_recent int;
+begin
+  -- the job claimed in [14] is 'processing' with a fresh lock (locked_by='test-worker')
+  select id into recent_id from email_delivery_jobs where locked_by='test-worker' and status='processing' limit 1;
+  -- simulate a crashed worker: a 'processing' job locked an hour ago
+  insert into email_delivery_jobs (organization_id, note_id, enqueued_by_therapist_id, destination_email, status, locked_at, locked_by, attempts)
+    values ('0a000000-0000-0000-0000-0000000000aa','0d000000-0000-0000-0000-0000000000d1','cccccccc-0000-0000-0000-00000000cccc','stale@x','processing', now() - interval '1 hour','dead-worker',1)
+    returning id into stale_id;
+
+  create temporary table _claimed on commit drop as
+    select id from claim_email_delivery_jobs(10, 'recovery-worker', 60);
+
+  select count(*) into got_stale from _claimed where id = stale_id;
+  select count(*) into got_recent from _claimed where id = recent_id;
+  if got_stale <> 1 then raise exception 'FAIL[stale]: stale processing job was not reclaimed'; end if;
+  if got_recent <> 0 then raise exception 'FAIL[stale]: a recently-locked job was wrongly reclaimed'; end if;
+  raise notice 'PASS[15]: 005 reclaims stale processing jobs but not recently-locked ones';
+end $$;
+
+reset role;
