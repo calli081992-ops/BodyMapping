@@ -10,7 +10,7 @@ import { env } from "./config.js";
 import { isHttpError } from "./lib/http-error.js";
 import { logger } from "./logger.js";
 import apiRouter from "./routes/api.js";
-import { startEmailQueueWorker } from "./services/email-queue.js";
+import { collectQueueMetrics, startEmailQueueWorker } from "./services/email-queue.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,6 +57,17 @@ app.get("/health", (_req, res) => {
     ok: true,
     environment: env.NODE_ENV,
   });
+});
+
+// Prometheus scrape endpoint. Aggregate queue depth only (no PHI). Intended for
+// internal monitoring; place it behind a network policy in production.
+app.get("/metrics", async (_req, res, next) => {
+  try {
+    const body = await collectQueueMetrics();
+    res.type("text/plain; version=0.0.4; charset=utf-8").send(body);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.use("/api", apiRouter);

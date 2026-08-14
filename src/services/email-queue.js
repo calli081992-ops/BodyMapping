@@ -167,6 +167,38 @@ export const getDeadJobCount = async (serviceDb) => {
   return count ?? 0;
 };
 
+const EMAIL_JOB_STATUSES = ["pending", "processing", "sent", "failed", "dead"];
+
+// Build a Prometheus text-format snapshot of queue depth by status. Aggregate,
+// all-org counts only (no PHI). Degrades gracefully: if the counts can't be read,
+// zeros are reported and email_delivery_metrics_up is 0.
+export const collectQueueMetrics = async (serviceDb = createServiceRoleClient()) => {
+  const counts = Object.fromEntries(EMAIL_JOB_STATUSES.map((status) => [status, 0]));
+  let scrapeOk = 1;
+  try {
+    const { data, error } = await serviceDb.rpc("email_queue_global_status_counts");
+    if (error) {
+      throw error;
+    }
+    for (const row of data ?? []) {
+      counts[row.status] = Number(row.count);
+    }
+  } catch (metricsError) {
+    scrapeOk = 0;
+    logger.warn({ err: metricsError }, "metrics: failed to collect email queue counts");
+  }
+
+  const lines = [
+    "# HELP email_delivery_jobs Number of email delivery jobs by status.",
+    "# TYPE email_delivery_jobs gauge",
+    ...EMAIL_JOB_STATUSES.map((status) => `email_delivery_jobs{status="${status}"} ${counts[status]}`),
+    "# HELP email_delivery_metrics_up 1 if email queue metrics were collected successfully, else 0.",
+    "# TYPE email_delivery_metrics_up gauge",
+    `email_delivery_metrics_up ${scrapeOk}`,
+  ];
+  return `${lines.join("\n")}\n`;
+};
+
 let workerHandle = null;
 
 // Start the background polling worker. No-op unless EMAIL_QUEUE_ENABLED is set.

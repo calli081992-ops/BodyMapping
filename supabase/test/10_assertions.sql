@@ -267,4 +267,55 @@ begin
   raise notice 'PASS[18]: 006 email_queue_status_counts returns per-status counts for owner/admin';
 end $$;
 
+-- [19] 007: owner/admin can bulk-requeue all dead jobs.
+do $$
+declare requeued int; dead_left int;
+begin
+  perform set_config('request.jwt.claim.sub','11111111-1111-1111-1111-111111111111', true);
+  select requeue_dead_email_delivery_jobs('0a000000-0000-0000-0000-0000000000aa', 500) into requeued;
+  if requeued < 1 then raise exception 'FAIL[bulk]: requeued % (expected >=1)', requeued; end if;
+  select count(*) into dead_left from email_delivery_jobs
+    where organization_id='0a000000-0000-0000-0000-0000000000aa' and status='dead';
+  if dead_left <> 0 then raise exception 'FAIL[bulk]: % dead jobs remain after bulk requeue', dead_left; end if;
+  raise notice 'PASS[19]: 007 owner/admin bulk-requeues dead jobs';
+end $$;
+
+-- [20] 007: a non-admin therapist cannot bulk-requeue.
+do $$
+declare denied boolean := false;
+begin
+  perform set_config('request.jwt.claim.sub','33333333-3333-3333-3333-333333333333', true);
+  begin
+    perform requeue_dead_email_delivery_jobs('0a000000-0000-0000-0000-0000000000aa', 500);
+  exception when others then denied := true;
+  end;
+  if not denied then raise exception 'FAIL[bulk-authz]: non-admin bulk-requeued jobs'; end if;
+  raise notice 'PASS[20]: 007 non-admin cannot bulk-requeue';
+end $$;
+
+-- [22] 007: the global counts function is not callable by authenticated users.
+do $$
+declare denied boolean := false;
+begin
+  perform set_config('request.jwt.claim.sub','11111111-1111-1111-1111-111111111111', true);
+  begin
+    perform email_queue_global_status_counts();
+  exception when others then denied := true;
+  end;
+  if not denied then raise exception 'FAIL[global-authz]: authenticated executed global counts'; end if;
+  raise notice 'PASS[22]: 007 global counts denied to authenticated';
+end $$;
+
+reset role;
+
+-- [21] 007: the service role can read aggregate all-org counts (for /metrics).
+set role service_role;
+do $$
+declare rows int;
+begin
+  select count(*) into rows from email_queue_global_status_counts();
+  if rows < 1 then raise exception 'FAIL[global-metrics]: got % status rows', rows; end if;
+  raise notice 'PASS[21]: 007 service_role reads global status counts';
+end $$;
+
 reset role;

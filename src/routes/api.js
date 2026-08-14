@@ -450,6 +450,20 @@ router.get("/email-jobs/metrics", async (req, res, next) => {
   }
 });
 
+router.post("/email-jobs/retry-dead", async (req, res, next) => {
+  try {
+    const { data, error } = await req.db.rpc("requeue_dead_email_delivery_jobs", {
+      p_org: req.auth.organizationId,
+    });
+    if (error) {
+      throw error;
+    }
+    res.json({ requeued: Number(data ?? 0) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/email-jobs/:jobId/retry", async (req, res, next) => {
   try {
     const { jobId } = z.object({ jobId: z.string().uuid() }).parse(req.params);
