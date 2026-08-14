@@ -9,6 +9,7 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().optional(),
   SUPABASE_URL: z.string().url(),
   SUPABASE_ANON_KEY: z.string().min(1),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   AWS_REGION: z.string().min(1),
   AWS_S3_BUCKET: z.string().min(1),
   AWS_KMS_KEY_ID: z.string().optional(),
@@ -16,6 +17,15 @@ const envSchema = z.object({
   PAUBOX_API_ENDPOINT: z.string().min(1),
   PAUBOX_FROM_EMAIL: z.string().email(),
   NOTE_RETENTION_YEARS: z.coerce.number().int().min(10).default(10),
+  PDF_DOWNLOAD_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(604800).default(3600),
+  EMAIL_QUEUE_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
+  EMAIL_QUEUE_POLL_INTERVAL_MS: z.coerce.number().int().min(1000).default(15000),
+  EMAIL_QUEUE_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+  EMAIL_QUEUE_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  EMAIL_QUEUE_BACKOFF_BASE_SECONDS: z.coerce.number().int().min(1).default(60),
 });
 
 const parsed = envSchema.safeParse(process.env);

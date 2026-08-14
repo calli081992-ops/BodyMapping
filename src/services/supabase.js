@@ -16,6 +16,18 @@ export const createRequestSupabaseClient = (accessToken) =>
     },
   });
 
+// Privileged client for trusted server-side work (the email delivery worker).
+// Uses the service role key, which BYPASSES Row-Level Security — never expose it to
+// clients or use it to serve user requests.
+export const createServiceRoleClient = () =>
+  createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+
 export const getAuthenticatedUser = async (accessToken) => {
   const client = createRequestSupabaseClient(accessToken);
   const { data, error } = await client.auth.getUser(accessToken);

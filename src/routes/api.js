@@ -12,9 +12,10 @@ import {
 } from "../lib/validators.js";
 import { logger } from "../logger.js";
 import { requireAuthContext } from "../middleware/auth-context.js";
+import { enqueueEmailDelivery } from "../services/email-queue.js";
 import { sendEncryptedNoteEmail } from "../services/paubox-service.js";
 import { buildSoapNotePdfBuffer } from "../services/pdf-service.js";
-import { uploadEncryptedPdf } from "../services/s3-storage.js";
+import { buildObjectKey, createEncryptedPdfDownloadUrl, uploadEncryptedPdf } from "../services/s3-storage.js";
 
 const noteIdParamSchema = z.object({
   noteId: z.string().uuid(),
@@ -288,6 +289,21 @@ router.post("/soap-notes/:noteId/email", async (req, res, next) => {
       throw new HttpError(400, "Client does not have a destination email.");
     }
 
+    if (env.EMAIL_QUEUE_ENABLED) {
+      const job = await enqueueEmailDelivery(req.db, {
+        organizationId: req.auth.organizationId,
+        noteId: note.id,
+        therapistId: req.auth.therapistId,
+        destinationEmail,
+      });
+      return res.status(202).json({
+        noteId: note.id,
+        destinationEmail,
+        status: "queued",
+        jobId: job.id,
+      });
+    }
+
     const organizationName = note.organization.name;
     const pdfBuffer = await buildSoapNotePdfBuffer({
       note,
@@ -357,6 +373,38 @@ router.post("/soap-notes/:noteId/email", async (req, res, next) => {
       });
     }
 
+    next(error);
+  }
+});
+
+router.get("/soap-notes/:noteId/pdf-url", async (req, res, next) => {
+  try {
+    const params = noteIdParamSchema.parse(req.params);
+    const { data: note, error } = await req.db
+      .from("soap_notes")
+      .select("id, client_id, s3_object_key, pdf_storage_status")
+      .eq("id", params.noteId)
+      .eq("organization_id", req.auth.organizationId)
+      .single();
+    if (error) {
+      throw error;
+    }
+
+    if (note.pdf_storage_status !== "stored" && !note.s3_object_key) {
+      throw new HttpError(409, "Encrypted PDF is not stored yet for this note.");
+    }
+
+    const objectKey =
+      note.s3_object_key ??
+      buildObjectKey({
+        organizationId: req.auth.organizationId,
+        clientId: note.client_id,
+        noteId: note.id,
+      });
+
+    const { url, expiresInSeconds } = await createEncryptedPdfDownloadUrl({ objectKey });
+    res.json({ noteId: note.id, url, expiresInSeconds });
+  } catch (error) {
     next(error);
   }
 });
