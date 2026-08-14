@@ -73,6 +73,7 @@ Run migrations in order:
 2. `supabase/migrations/002_access_policy_hardening.sql`
 3. `supabase/migrations/003_email_delivery_queue.sql`
 4. `supabase/migrations/004_email_delivery_job_admin_controls.sql`
+5. `supabase/migrations/005_rls_helper_security_definer_fix.sql`
 
 ### 4) Start the server
 
@@ -139,6 +140,8 @@ In `public/index.html`:
 8. Use **Secure PDF link** for short-lived signed download URLs
 9. Retry dead-letter jobs (single or bulk for owner/admin) and review queue metrics
 10. Review metadata-only email audit events and delivery-job status
+
+If you already ran `001`–`004`, run migration `005` to fix helper-function execution context and prevent RLS policy recursion during enqueue/access checks.
 
 ## Future SaaS Scaling Notes
 
