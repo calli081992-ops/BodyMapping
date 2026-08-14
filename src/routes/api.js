@@ -409,4 +409,58 @@ router.get("/soap-notes/:noteId/pdf-url", async (req, res, next) => {
   }
 });
 
+router.get("/email-jobs", async (req, res, next) => {
+  try {
+    const requestedStatus = typeof req.query.status === "string" ? req.query.status.trim() : "";
+    let queryBuilder = req.db
+      .from("email_delivery_jobs")
+      .select(
+        "id, note_id, destination_email, status, attempts, max_attempts, next_attempt_at, last_error, error_code, external_message_id, created_at, updated_at",
+      )
+      .eq("organization_id", req.auth.organizationId)
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (requestedStatus) {
+      queryBuilder = queryBuilder.eq("status", requestedStatus);
+    }
+
+    const { data, error } = await queryBuilder;
+    if (error) {
+      throw error;
+    }
+    res.json({ jobs: data ?? [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/email-jobs/metrics", async (req, res, next) => {
+  try {
+    const { data, error } = await req.db.rpc("email_queue_status_counts", {
+      p_org: req.auth.organizationId,
+    });
+    if (error) {
+      throw error;
+    }
+    const counts = Object.fromEntries((data ?? []).map((row) => [row.status, Number(row.count)]));
+    res.json({ organizationId: req.auth.organizationId, counts });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/email-jobs/:jobId/retry", async (req, res, next) => {
+  try {
+    const { jobId } = z.object({ jobId: z.string().uuid() }).parse(req.params);
+    const { data, error } = await req.db.rpc("requeue_email_delivery_job", { p_job_id: jobId });
+    if (error) {
+      throw error;
+    }
+    res.json({ job: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

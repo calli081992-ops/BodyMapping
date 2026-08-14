@@ -219,3 +219,52 @@ begin
 end $$;
 
 reset role;
+
+-- Seed two dead jobs (as the superuser, bypassing RLS) for the 006 admin checks.
+insert into email_delivery_jobs (id, organization_id, note_id, enqueued_by_therapist_id, destination_email, status, attempts, max_attempts)
+values
+  ('0e000000-0000-0000-0000-0000000000e1','0a000000-0000-0000-0000-0000000000aa','0d000000-0000-0000-0000-0000000000d1','aaaaaaaa-0000-0000-0000-00000000aaaa','dead1@x','dead',5,5),
+  ('0e000000-0000-0000-0000-0000000000e2','0a000000-0000-0000-0000-0000000000aa','0d000000-0000-0000-0000-0000000000d1','cccccccc-0000-0000-0000-00000000cccc','dead2@x','dead',5,5);
+
+set role authenticated;
+
+-- [16] 006: an owner/admin can requeue a dead job (status -> pending, attempts reset).
+do $$
+declare st email_delivery_status; att int;
+begin
+  perform set_config('request.jwt.claim.sub','11111111-1111-1111-1111-111111111111', true);
+  begin
+    perform requeue_email_delivery_job('0e000000-0000-0000-0000-0000000000e1');
+  exception when others then raise exception 'FAIL[requeue]: owner could not requeue dead job: %', sqlerrm;
+  end;
+  select status, attempts into st, att from email_delivery_jobs where id='0e000000-0000-0000-0000-0000000000e1';
+  if st <> 'pending' or att <> 0 then raise exception 'FAIL[requeue-state]: status=% attempts=% (expected pending/0)', st, att; end if;
+  raise notice 'PASS[16]: 006 owner/admin can requeue a dead job';
+end $$;
+
+-- [17] 006: a non-admin therapist cannot requeue.
+do $$
+declare denied boolean := false;
+begin
+  perform set_config('request.jwt.claim.sub','33333333-3333-3333-3333-333333333333', true);
+  begin
+    perform requeue_email_delivery_job('0e000000-0000-0000-0000-0000000000e2');
+  exception when others then denied := true;
+  end;
+  if not denied then raise exception 'FAIL[requeue-authz]: non-admin therapist requeued a job'; end if;
+  raise notice 'PASS[17]: 006 non-admin cannot requeue a job';
+end $$;
+
+-- [18] 006: status-count metrics are available to owner/admin.
+do $$
+declare rows int; dead_ct bigint;
+begin
+  perform set_config('request.jwt.claim.sub','11111111-1111-1111-1111-111111111111', true);
+  select count(*) into rows from email_queue_status_counts('0a000000-0000-0000-0000-0000000000aa');
+  if rows < 1 then raise exception 'FAIL[metrics]: owner received % status rows', rows; end if;
+  select coalesce((select count from email_queue_status_counts('0a000000-0000-0000-0000-0000000000aa') where status='dead'), 0) into dead_ct;
+  if dead_ct < 1 then raise exception 'FAIL[metrics]: expected at least one dead job in counts, got %', dead_ct; end if;
+  raise notice 'PASS[18]: 006 email_queue_status_counts returns per-status counts for owner/admin';
+end $$;
+
+reset role;

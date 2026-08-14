@@ -155,6 +155,18 @@ export const runEmailQueueOnce = async (
   return summary;
 };
 
+// Count jobs that exhausted retries and need manual attention.
+export const getDeadJobCount = async (serviceDb) => {
+  const { count, error } = await serviceDb
+    .from("email_delivery_jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "dead");
+  if (error) {
+    throw error;
+  }
+  return count ?? 0;
+};
+
 let workerHandle = null;
 
 // Start the background polling worker. No-op unless EMAIL_QUEUE_ENABLED is set.
@@ -169,6 +181,7 @@ export const startEmailQueueWorker = () => {
 
   const serviceDb = createServiceRoleClient();
   let inFlight = false;
+  let lastDeadCount = -1;
   const tick = async () => {
     if (inFlight) {
       return;
@@ -179,6 +192,16 @@ export const startEmailQueueWorker = () => {
       if (summary.claimed > 0) {
         logger.info(summary, "email queue batch processed");
       }
+
+      // Periodic dead-letter alert: warn when the backlog appears or grows, and note
+      // when it clears, without logging the same count every poll.
+      const deadCount = await getDeadJobCount(serviceDb);
+      if (deadCount > 0 && deadCount !== lastDeadCount) {
+        logger.warn({ deadJobs: deadCount }, "email delivery jobs in dead state need attention");
+      } else if (deadCount === 0 && lastDeadCount > 0) {
+        logger.info("email delivery dead-letter backlog cleared");
+      }
+      lastDeadCount = deadCount;
     } catch (pollError) {
       logger.error({ err: pollError }, "email queue poll failed");
     } finally {
