@@ -54,3 +54,12 @@ export const emailJobQuerySchema = z.object({
 export const downloadUrlQuerySchema = z.object({
   expiresInSeconds: z.coerce.number().int().min(60).max(900).optional(),
 });
+
+export const retryEmailJobSchema = z.object({
+  resetAttempts: z.boolean().default(false),
+});
+
+export const bulkRetryEmailJobsSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  resetAttempts: z.boolean().default(true),
+});

@@ -280,8 +280,13 @@
             <input id="jobLimit" type="number" min="1" max="100" value="25" />
           </div>
         </div>
-        <button id="loadDeliveryJobs" class="secondary" type="button">Load delivery jobs</button>
+        <div class="inline-actions">
+          <button id="loadDeliveryJobs" class="secondary" type="button">Load delivery jobs</button>
+          <button id="retryFailedJobs" class="secondary" type="button">Retry failed jobs (admin)</button>
+          <button id="loadJobMetrics" class="secondary" type="button">Load queue metrics</button>
+        </div>
         <div id="jobStatus" class="status muted">No delivery jobs loaded.</div>
+        <div id="jobMetricsStatus" class="status muted">No queue metrics loaded.</div>
         <ul id="jobList" class="clean"></ul>
       </section>
     </main>
@@ -636,11 +641,70 @@
           for (const job of payload.jobs || []) {
             const row = document.createElement("li");
             row.textContent = `${job.createdAt} - ${job.status.toUpperCase()} - note ${job.noteId} - ${job.destinationEmail} - attempts ${job.attemptCount}/${job.maxAttempts}`;
+
+            if (job.status === "failed" || job.status === "retry_pending") {
+              const retryButton = document.createElement("button");
+              retryButton.type = "button";
+              retryButton.className = "secondary";
+              retryButton.style.marginLeft = "8px";
+              retryButton.textContent = "Retry now";
+              retryButton.onclick = async () => {
+                retryButton.disabled = true;
+                try {
+                  await api(`/api/email-delivery-jobs/${job.id}/retry`, {
+                    method: "POST",
+                    body: JSON.stringify({ resetAttempts: false }),
+                  });
+                  setStatus("jobStatus", `Retry queued for job ${job.id}.`);
+                  await loadDeliveryJobs();
+                } catch (error) {
+                  setStatus("jobStatus", error.message, true);
+                } finally {
+                  retryButton.disabled = false;
+                }
+              };
+              row.append(retryButton);
+            }
             list.append(row);
           }
           setStatus("jobStatus", `Loaded ${(payload.jobs || []).length} delivery jobs.`);
         } catch (error) {
           setStatus("jobStatus", error.message, true);
+        }
+      }
+
+      async function retryFailedJobs() {
+        try {
+          const limit = byId("jobLimit").value || "25";
+          const payload = await api("/api/email-delivery-jobs/retry-failed", {
+            method: "POST",
+            body: JSON.stringify({
+              limit: Number(limit),
+              resetAttempts: true,
+            }),
+          });
+          setStatus(
+            "jobStatus",
+            `Bulk retry queued for ${payload.retriedCount} failed jobs.`,
+          );
+          await loadDeliveryJobs();
+          await loadJobMetrics();
+        } catch (error) {
+          setStatus("jobStatus", error.message, true);
+        }
+      }
+
+      async function loadJobMetrics() {
+        try {
+          const payload = await api("/api/email-delivery-jobs/metrics");
+          const metrics = payload.metrics || {};
+          const byStatus = metrics.byStatus || {};
+          setStatus(
+            "jobMetricsStatus",
+            `queued=${byStatus.queued || 0}, processing=${byStatus.processing || 0}, retry_pending=${byStatus.retry_pending || 0}, succeeded=${byStatus.succeeded || 0}, failed=${byStatus.failed || 0}, due_now=${metrics.dueNowCount || 0}, stale_processing=${metrics.staleProcessingCount || 0}`,
+          );
+        } catch (error) {
+          setStatus("jobMetricsStatus", error.message, true);
         }
       }
 
@@ -652,6 +716,8 @@
       byId("grantClientAccess").addEventListener("click", grantClientAccess);
       byId("loadAuditLog").addEventListener("click", loadAuditLog);
       byId("loadDeliveryJobs").addEventListener("click", loadDeliveryJobs);
+      byId("retryFailedJobs").addEventListener("click", retryFailedJobs);
+      byId("loadJobMetrics").addEventListener("click", loadJobMetrics);
     </script>
   </body>
 </html>

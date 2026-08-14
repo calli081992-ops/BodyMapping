@@ -32,6 +32,67 @@ const getRetryTimestamp = (attemptCount) => {
   return new Date(Date.now() + waitSeconds * 1000).toISOString();
 };
 
+const recoverStuckProcessingJobs = async () => {
+  const nowIso = new Date().toISOString();
+  const cutoffIso = new Date(
+    Date.now() - env.EMAIL_QUEUE_PROCESSING_TIMEOUT_SECONDS * 1000,
+  ).toISOString();
+
+  const { data: stuckJobs, error } = await adminDb
+    .from("email_delivery_jobs")
+    .select("id, organization_id, note_id, destination_email, attempt_count, max_attempts")
+    .eq("status", "processing")
+    .or(`last_attempt_at.lt.${cutoffIso},and(last_attempt_at.is.null,created_at.lt.${cutoffIso})`)
+    .order("created_at", { ascending: true })
+    .limit(env.EMAIL_QUEUE_BATCH_SIZE * 5);
+  if (error) {
+    throw error;
+  }
+
+  for (const job of stuckJobs ?? []) {
+    const terminalFailure = job.attempt_count >= job.max_attempts;
+    const patch = terminalFailure
+      ? {
+          status: "failed",
+          completed_at: nowIso,
+          next_attempt_at: nowIso,
+          last_error_code: "PROCESSING_TIMEOUT",
+          last_error_message:
+            "Recovered by stale-lock guard after exceeding processing timeout and max attempts.",
+        }
+      : {
+          status: "retry_pending",
+          completed_at: null,
+          next_attempt_at: nowIso,
+          last_error_code: "PROCESSING_TIMEOUT",
+          last_error_message:
+            "Recovered by stale-lock guard after exceeding processing timeout.",
+        };
+
+    const { error: updateError } = await adminDb
+      .from("email_delivery_jobs")
+      .update(patch)
+      .eq("id", job.id)
+      .eq("status", "processing");
+    if (updateError) {
+      throw updateError;
+    }
+
+    logger.warn(
+      {
+        jobId: job.id,
+        organizationId: job.organization_id,
+        noteId: job.note_id,
+        destinationEmail: job.destination_email,
+        attemptCount: job.attempt_count,
+        maxAttempts: job.max_attempts,
+        terminalFailure,
+      },
+      "Recovered stale processing email delivery job.",
+    );
+  }
+};
+
 const logAuditEvent = async ({
   organizationId,
   noteId,
@@ -218,6 +279,7 @@ export const processEmailQueueOnce = async () => {
 
   isProcessing = true;
   try {
+    await recoverStuckProcessingJobs();
     const nowIso = new Date().toISOString();
     const { data: candidates, error } = await adminDb
       .from("email_delivery_jobs")

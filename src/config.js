@@ -26,6 +26,7 @@ const envSchema = z.object({
   EMAIL_QUEUE_BATCH_SIZE: z.coerce.number().int().min(1).max(50).default(10),
   EMAIL_QUEUE_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
   EMAIL_QUEUE_BACKOFF_BASE_SECONDS: z.coerce.number().int().min(15).max(3600).default(60),
+  EMAIL_QUEUE_PROCESSING_TIMEOUT_SECONDS: z.coerce.number().int().min(30).max(3600).default(300),
 });
 
 const parsed = envSchema.safeParse(process.env);

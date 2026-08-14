@@ -5,6 +5,7 @@ import { env } from "../config.js";
 import { HttpError } from "../lib/http-error.js";
 import { parseBody, parseQuery, sanitizeIlikeTerm } from "../lib/request-helpers.js";
 import {
+  bulkRetryEmailJobsSchema,
   createClientSchema,
   downloadUrlQuerySchema,
   emailAuditQuerySchema,
@@ -12,6 +13,7 @@ import {
   grantClientAccessSchema,
   historyQuerySchema,
   queueEmailRequestSchema,
+  retryEmailJobSchema,
   soapNoteInputSchema,
 } from "../lib/validators.js";
 import { logger } from "../logger.js";
@@ -40,6 +42,16 @@ const emailDeliveryJobIdParamSchema = z.object({
 const router = Router();
 
 router.use(requireAuthContext);
+
+const adminRoles = new Set(["owner", "admin"]);
+
+const hasAdminRole = (auth) => adminRoles.has(auth.role);
+
+const ensureAdminRole = (auth) => {
+  if (!hasAdminRole(auth)) {
+    throw new HttpError(403, "Only owner/admin roles can perform this action.");
+  }
+};
 
 const loadNoteWithContext = async ({ db, organizationId, noteId }) => {
   const { data, error } = await db
@@ -400,6 +412,156 @@ router.get("/email-delivery-jobs", async (req, res, next) => {
   }
 });
 
+router.get("/email-delivery-jobs/dead-letter", async (req, res, next) => {
+  try {
+    const query = parseQuery(emailJobQuerySchema, req.query);
+    const { data, error } = await req.db
+      .from("email_delivery_jobs")
+      .select(
+        "id, note_id, requested_by_therapist_id, destination_email, status, attempt_count, max_attempts, next_attempt_at, last_attempt_at, completed_at, last_error_code, last_error_message, created_at",
+      )
+      .eq("organization_id", req.auth.organizationId)
+      .eq("status", "failed")
+      .order("completed_at", { ascending: false })
+      .limit(query.limit);
+    if (error) {
+      throw error;
+    }
+
+    res.json({
+      deadLetterJobs: (data ?? []).map((job) => ({
+        id: job.id,
+        noteId: job.note_id,
+        requestedByTherapistId: job.requested_by_therapist_id,
+        destinationEmail: job.destination_email,
+        status: job.status,
+        attemptCount: job.attempt_count,
+        maxAttempts: job.max_attempts,
+        nextAttemptAt: job.next_attempt_at,
+        lastAttemptAt: job.last_attempt_at,
+        completedAt: job.completed_at,
+        lastErrorCode: job.last_error_code,
+        lastErrorMessage: job.last_error_message,
+        createdAt: job.created_at,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/email-delivery-jobs/metrics", async (req, res, next) => {
+  try {
+    const nowIso = new Date().toISOString();
+    const staleCutoffIso = new Date(
+      Date.now() - env.EMAIL_QUEUE_PROCESSING_TIMEOUT_SECONDS * 1000,
+    ).toISOString();
+    const statuses = ["queued", "processing", "retry_pending", "succeeded", "failed"];
+
+    const countByStatus = await Promise.all(
+      statuses.map(async (status) => {
+        const { count, error } = await req.db
+          .from("email_delivery_jobs")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", req.auth.organizationId)
+          .eq("status", status);
+        if (error) {
+          throw error;
+        }
+        return [status, count ?? 0];
+      }),
+    );
+
+    const { count: dueNowCount, error: dueNowError } = await req.db
+      .from("email_delivery_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", req.auth.organizationId)
+      .in("status", ["queued", "retry_pending"])
+      .lte("next_attempt_at", nowIso);
+    if (dueNowError) {
+      throw dueNowError;
+    }
+
+    const { count: staleProcessingCount, error: staleError } = await req.db
+      .from("email_delivery_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", req.auth.organizationId)
+      .eq("status", "processing")
+      .or(
+        `last_attempt_at.lt.${staleCutoffIso},and(last_attempt_at.is.null,created_at.lt.${staleCutoffIso})`,
+      );
+    if (staleError) {
+      throw staleError;
+    }
+
+    res.json({
+      metrics: {
+        byStatus: Object.fromEntries(countByStatus),
+        dueNowCount: dueNowCount ?? 0,
+        staleProcessingCount: staleProcessingCount ?? 0,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/email-delivery-jobs/retry-failed", async (req, res, next) => {
+  try {
+    ensureAdminRole(req.auth);
+    const payload = parseBody(bulkRetryEmailJobsSchema, req.body ?? {});
+    const { data: failedJobs, error: failedFetchError } = await req.db
+      .from("email_delivery_jobs")
+      .select("id")
+      .eq("organization_id", req.auth.organizationId)
+      .eq("status", "failed")
+      .order("completed_at", { ascending: false })
+      .limit(payload.limit);
+    if (failedFetchError) {
+      throw failedFetchError;
+    }
+
+    const jobIds = (failedJobs ?? []).map((job) => job.id);
+    if (jobIds.length === 0) {
+      return res.json({
+        retriedCount: 0,
+        retriedJobIds: [],
+      });
+    }
+
+    const patch = {
+      status: "queued",
+      next_attempt_at: new Date().toISOString(),
+      completed_at: null,
+      last_error_code: null,
+      last_error_message: null,
+      external_message_id: null,
+    };
+    if (payload.resetAttempts) {
+      patch.attempt_count = 0;
+    }
+
+    const { data: updated, error: updateError } = await req.db
+      .from("email_delivery_jobs")
+      .update(patch)
+      .eq("organization_id", req.auth.organizationId)
+      .in("id", jobIds)
+      .select("id");
+    if (updateError) {
+      throw updateError;
+    }
+
+    triggerEmailQueueProcessing();
+
+    return res.json({
+      retriedCount: (updated ?? []).length,
+      retriedJobIds: (updated ?? []).map((row) => row.id),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/email-delivery-jobs/:jobId", async (req, res, next) => {
   try {
     const { jobId } = emailDeliveryJobIdParamSchema.parse(req.params);
@@ -428,6 +590,79 @@ router.get("/email-delivery-jobs/:jobId", async (req, res, next) => {
         completedAt: data.completed_at,
         lastErrorCode: data.last_error_code,
         createdAt: data.created_at,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/email-delivery-jobs/:jobId/retry", async (req, res, next) => {
+  try {
+    const { jobId } = emailDeliveryJobIdParamSchema.parse(req.params);
+    const payload = parseBody(retryEmailJobSchema, req.body ?? {});
+    const { data: job, error: jobFetchError } = await req.db
+      .from("email_delivery_jobs")
+      .select(
+        "id, requested_by_therapist_id, status, attempt_count, max_attempts, note_id, destination_email, next_attempt_at, last_attempt_at, completed_at",
+      )
+      .eq("organization_id", req.auth.organizationId)
+      .eq("id", jobId)
+      .single();
+    if (jobFetchError) {
+      throw jobFetchError;
+    }
+
+    const requesterOwnsJob = job.requested_by_therapist_id === req.auth.therapistId;
+    if (!requesterOwnsJob && !hasAdminRole(req.auth)) {
+      throw new HttpError(
+        403,
+        "Only the requesting therapist or an owner/admin can retry this job.",
+      );
+    }
+    if (job.status === "succeeded") {
+      throw new HttpError(409, "Completed successful jobs cannot be retried.");
+    }
+
+    const patch = {
+      status: "queued",
+      next_attempt_at: new Date().toISOString(),
+      completed_at: null,
+      last_error_code: null,
+      last_error_message: null,
+      external_message_id: null,
+    };
+    if (payload.resetAttempts) {
+      patch.attempt_count = 0;
+    }
+
+    const { data: updated, error: updateError } = await req.db
+      .from("email_delivery_jobs")
+      .update(patch)
+      .eq("organization_id", req.auth.organizationId)
+      .eq("id", job.id)
+      .select(
+        "id, note_id, destination_email, status, attempt_count, max_attempts, next_attempt_at, last_attempt_at, completed_at, last_error_code",
+      )
+      .single();
+    if (updateError) {
+      throw updateError;
+    }
+
+    triggerEmailQueueProcessing();
+
+    res.json({
+      job: {
+        id: updated.id,
+        noteId: updated.note_id,
+        destinationEmail: updated.destination_email,
+        status: updated.status,
+        attemptCount: updated.attempt_count,
+        maxAttempts: updated.max_attempts,
+        nextAttemptAt: updated.next_attempt_at,
+        lastAttemptAt: updated.last_attempt_at,
+        completedAt: updated.completed_at,
+        lastErrorCode: updated.last_error_code,
       },
     });
   } catch (error) {

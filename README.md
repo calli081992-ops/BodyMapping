@@ -16,6 +16,7 @@ HIPAA-oriented SOAP notes web app starter for massage therapists and spa teams. 
 - Team client-sharing controls for spa/business organizations
 - Background delivery queue with retry/backoff for Paubox sends
 - Signed S3 download URLs for secure PDF retrieval
+- Stale-lock recovery and dead-letter retry operations for delivery jobs
 
 ## Architecture
 
@@ -71,6 +72,7 @@ Run migrations in order:
 1. `supabase/migrations/001_initial_schema.sql`
 2. `supabase/migrations/002_access_policy_hardening.sql`
 3. `supabase/migrations/003_email_delivery_queue.sql`
+4. `supabase/migrations/004_email_delivery_job_admin_controls.sql`
 
 ### 4) Start the server
 
@@ -117,6 +119,10 @@ Endpoints:
 - `POST /api/soap-notes/:noteId/email`
 - `GET /api/email-delivery-jobs`
 - `GET /api/email-delivery-jobs/:jobId`
+- `GET /api/email-delivery-jobs/dead-letter`
+- `GET /api/email-delivery-jobs/metrics`
+- `POST /api/email-delivery-jobs/:jobId/retry`
+- `POST /api/email-delivery-jobs/retry-failed` (owner/admin)
 - `GET /api/audit/email-sends`
 
 ## Frontend Prototype Usage
@@ -131,7 +137,8 @@ In `public/index.html`:
 6. Search history by organization-accessible records or only your therapist-authored records
 7. Click **Send encrypted PDF** to queue delivery (automatic retry/backoff in background worker)
 8. Use **Secure PDF link** for short-lived signed download URLs
-9. Review metadata-only email audit events and delivery-job status
+9. Retry dead-letter jobs (single or bulk for owner/admin) and review queue metrics
+10. Review metadata-only email audit events and delivery-job status
 
 ## Future SaaS Scaling Notes
 

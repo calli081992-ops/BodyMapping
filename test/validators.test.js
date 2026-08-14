@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { sanitizeIlikeTerm } from "../src/lib/request-helpers.js";
 import {
+  bulkRetryEmailJobsSchema,
   createClientSchema,
   downloadUrlQuerySchema,
   emailAuditQuerySchema,
@@ -11,6 +12,7 @@ import {
   grantClientAccessSchema,
   historyQuerySchema,
   queueEmailRequestSchema,
+  retryEmailJobSchema,
   soapNoteInputSchema,
 } from "../src/lib/validators.js";
 
@@ -101,4 +103,19 @@ test("downloadUrlQuerySchema constrains signed URL ttl range", () => {
   });
   assert.equal(ok.success, true);
   assert.equal(fail.success, false);
+});
+
+test("retryEmailJobSchema defaults resetAttempts to false", () => {
+  const result = retryEmailJobSchema.safeParse({});
+  assert.equal(result.success, true);
+  assert.equal(result.data.resetAttempts, false);
+});
+
+test("bulkRetryEmailJobsSchema defaults resetAttempts true with limit", () => {
+  const result = bulkRetryEmailJobsSchema.safeParse({
+    limit: 15,
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.data.limit, 15);
+  assert.equal(result.data.resetAttempts, true);
 });
