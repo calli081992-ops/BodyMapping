@@ -19,8 +19,9 @@ Assertions cover: no RLS recursion + members reading their org/memberships (`005
 tenant + cross-org isolation, `can_edit_client` / `can_manage_client_access` scoping
 (`002`), email-queue enqueue authorization (`003`), job update authorization +
 immutability (`004`), the retention delete guard, the generated full-text `tsvector`,
-and that every RLS helper is `SECURITY DEFINER`. Any regression raises and the runner
-exits non-zero.
+that every RLS helper is `SECURITY DEFINER`, and that a therapist can create + see
+their own client via `insert ... returning` (`007`). Any regression raises and the
+runner exits non-zero.
 
 ## Running
 

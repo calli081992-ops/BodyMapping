@@ -161,6 +161,23 @@ begin
   raise notice 'PASS[9]: 10-year retention default + full-text search';
 end $$;
 
+-- [11] 007: a non-admin therapist can create a client via INSERT ... RETURNING and see it.
+do $$
+declare v_id uuid; n int;
+begin
+  perform set_config('request.jwt.claim.sub','10000000-0000-0000-0000-000000000003', true); -- therapist C
+  begin
+    insert into clients (organization_id, primary_therapist_id, created_by_therapist_id, first_name, last_name, email)
+      values ('20000000-0000-0000-0000-000000000001','cccccccc-0000-0000-0000-00000000cccc','cccccccc-0000-0000-0000-00000000cccc','New','ByC','nbyc@x')
+      returning id into v_id;
+  exception when others then
+    raise exception 'FAIL[create-client]: therapist could not create client via insert..returning: %', sqlerrm;
+  end;
+  select count(*) into n from clients where id = v_id;
+  if n <> 1 then raise exception 'FAIL[create-client-visible]: creator cannot see the new client'; end if;
+  raise notice 'PASS[11]: 007 therapist creates + sees own client (insert..returning)';
+end $$;
+
 reset role;
 
 -- [10] 005: RLS helper functions are SECURITY DEFINER (prevents recursion).
