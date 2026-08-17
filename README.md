@@ -75,6 +75,7 @@ Run migrations in order:
 4. `supabase/migrations/004_email_delivery_job_admin_controls.sql`
 5. `supabase/migrations/005_rls_helper_security_definer_fix.sql`
 6. `supabase/migrations/006_fix_membership_select_recursion.sql`
+7. `supabase/migrations/007_client_primary_creator_visibility.sql`
 
 ### 4) Start the server
 
@@ -147,6 +148,7 @@ If you already ran `001`–`005`, run migration `006` to replace the recursive `
 Optional manual DB smoke check:
 
 - `supabase/tests/membership-policy-recursion-check.sql`
+- `supabase/tests/client-primary-creator-visibility-check.sql`
 
 ## Future SaaS Scaling Notes
 
