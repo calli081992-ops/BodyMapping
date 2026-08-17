@@ -1,0 +1,13 @@
+{
+  "$schema": "https://www.cursor.com/schemas/environment.schema.json",
+  "name": "BodyMapping HIPAA SOAP Notes",
+  "install": "if [ -f package-lock.json ]; then npm ci; elif [ -f package.json ]; then npm install; fi; if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi",
+  "ports": [{ "name": "web", "port": 3000 }],
+  "terminals": [
+    {
+      "name": "dev-server",
+      "command": "npm run dev",
+      "description": "Express dev server (npm run dev): UI at /, health at /health, API under /api on port 3000."
+    }
+  ]
+}
