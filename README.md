@@ -74,6 +74,7 @@ Run migrations in order:
 3. `supabase/migrations/003_email_delivery_queue.sql`
 4. `supabase/migrations/004_email_delivery_job_admin_controls.sql`
 5. `supabase/migrations/005_rls_helper_security_definer_fix.sql`
+6. `supabase/migrations/006_fix_membership_select_recursion.sql`
 
 ### 4) Start the server
 
@@ -141,7 +142,11 @@ In `public/index.html`:
 9. Retry dead-letter jobs (single or bulk for owner/admin) and review queue metrics
 10. Review metadata-only email audit events and delivery-job status
 
-If you already ran `001`–`004`, run migration `005` to fix helper-function execution context and prevent RLS policy recursion during enqueue/access checks.
+If you already ran `001`–`005`, run migration `006` to replace the recursive `organization_memberships` select policy pattern with helper-based membership checks.
+
+Optional manual DB smoke check:
+
+- `supabase/tests/membership-policy-recursion-check.sql`
 
 ## Future SaaS Scaling Notes
 
